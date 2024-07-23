@@ -53,5 +53,5 @@ sudo systemctl enable code-server
 sudo systemctl start code-server
 
 echo "Code-server installation and setup complete!"
-echo "You can access code-server at https://localhost.local:5777"
+echo "You can access code-server at https://$HOSTNAME:5777 or https://0.0.0.0:5777"
 echo "Use the password: $PASSWORD to log in."
