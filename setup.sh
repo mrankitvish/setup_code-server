@@ -3,29 +3,63 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-# Variables
-CODE_SERVER_VERSION="4.91.1"
-DEB_PACKAGE="code-server_${CODE_SERVER_VERSION}_amd64.deb"
+# Detect the current user
+USER=$(whoami)
 SERVICE_FILE="/etc/systemd/system/code-server.service"
-USER="ubuntu"  # Change this to your username if different
-PASSWORD="secret"  # Change this to a secure password
+PASSWORD=${PASSWORD:-"$(openssl rand -base64 16)"}
 
-# Update package list
-echo "Updating package list..."
-sudo apt update
+# Determine the package manager
+if command -v apt > /dev/null; then
+    PACKAGE_MANAGER="apt"
+elif command -v dnf > /dev/null; then
+    PACKAGE_MANAGER="dnf"
+elif command -v yum > /dev/null; then
+    PACKAGE_MANAGER="yum"
+elif command -v zypper > /dev/null; then
+    PACKAGE_MANAGER="zypper"
+else
+    echo "Unsupported package manager. Install code-server manually."
+    exit 1
+fi
 
-# Download code-server
+# Update packages and install prerequisites
+echo "Updating packages and installing prerequisites..."
+case $PACKAGE_MANAGER in
+    apt)
+        sudo apt update && sudo apt install -y wget openssl;;
+    dnf|yum)
+        sudo $PACKAGE_MANAGER install -y wget openssl;;
+    zypper)
+        sudo zypper refresh && sudo zypper install -y wget openssl;;
+esac
+
+# Define the latest version and package URLs
+CODE_SERVER_VERSION="4.95.1"
+DEB_PACKAGE="code-server_${CODE_SERVER_VERSION}_amd64.deb"
+RPM_PACKAGE="code-server-${CODE_SERVER_VERSION}-amd64.rpm"
+
+# Download and install code-server based on package manager
 echo "Downloading code-server version $CODE_SERVER_VERSION..."
-wget https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/$DEB_PACKAGE
-
-# Install code-server
-echo "Installing code-server..."
-sudo apt install ./$DEB_PACKAGE -y
+if [[ "$PACKAGE_MANAGER" == "apt" ]]; then
+    wget https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/$DEB_PACKAGE
+    echo "Installing code-server..."
+    sudo apt install ./$DEB_PACKAGE -y
+    rm $DEB_PACKAGE
+elif [[ "$PACKAGE_MANAGER" == "dnf" || "$PACKAGE_MANAGER" == "yum" || "$PACKAGE_MANAGER" == "zypper" ]]; then
+    wget https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/$RPM_PACKAGE
+    echo "Installing code-server..."
+    sudo $PACKAGE_MANAGER install ./$RPM_PACKAGE -y
+    rm $RPM_PACKAGE
+else
+    echo "Package installation for code-server is only supported on apt, dnf, yum, and zypper."
+    exit 1
+fi
 
 # Generate self-signed certificates
 echo "Generating self-signed certificates..."
-mkdir -p ~/.local/share/code-server
-cd ~/.local/share/code-server/
+CERT_PATH="/home/$USER/.local/share/code-server"
+mkdir -p $CERT_PATH
+cd $CERT_PATH
 openssl req -x509 -sha256 -nodes -newkey rsa:2048 -days 365 -keyout localhost.key -out localhost.crt -subj "/CN=localhost.local"
 
 # Create systemd service file
@@ -33,14 +67,13 @@ echo "Creating systemd service file..."
 cat <<EOL | sudo tee $SERVICE_FILE
 [Unit]
 Description=code-server
-After=nginx.service
+After=network.target
 
 [Service]
 Type=simple
 User=$USER
-Group=$USER
 Environment=PASSWORD=$PASSWORD
-ExecStart=/usr/bin/code-server --bind-addr 0.0.0.0:5777 --auth password --cert /home/$USER/.local/share/code-server/localhost.crt --cert-host localhost.local --cert-key /home/$USER/.local/share/code-server/localhost.key 
+ExecStart=/usr/bin/code-server --bind-addr 0.0.0.0:5777 --auth password --cert $CERT_PATH/localhost.crt --cert-key $CERT_PATH/localhost.key
 Restart=always
 
 [Install]
@@ -49,6 +82,7 @@ EOL
 
 # Enable and start code-server
 echo "Enabling and starting code-server service..."
+sudo systemctl daemon-reload
 sudo systemctl enable code-server
 sudo systemctl start code-server
 
